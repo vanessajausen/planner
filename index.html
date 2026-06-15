@@ -96,6 +96,8 @@ const PRIOS=[["urgent","Urgent","var(--urgent)"],["high","High","var(--high)"],[
 const PRANK={urgent:0,high:1,normal:2,low:3};
 const DAYNAMES=["Mon","Tue","Wed","Thu","Fri"];
 
+  const HOUROPTS=[0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5,3.75,4];
+
 let state=null, storageMode="memory";
 
 function startMidnight(d){const x=new Date(d);x.setHours(0,0,0,0);return x;}
