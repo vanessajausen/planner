@@ -2,6 +2,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Weekly planner</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📅</text></svg>">
 <style>
   :root{
     --bg:#F5F4F1; --surface:#FFFFFF; --line:rgba(0,0,0,0.10); --line2:rgba(0,0,0,0.18);
@@ -13,8 +14,12 @@
   html,body{margin:0}
   body{background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
   header{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:0.5px solid var(--line);background:var(--surface);position:sticky;top:0;z-index:5}
-  header h1{font-size:16px;font-weight:600;margin:0;letter-spacing:-0.01em}
-  header .week{font-size:12px;color:var(--muted)}
+  header h1{font-size:16px;font-weight:650;margin:0;letter-spacing:-0.02em}
+  header .brand{display:flex;align-items:center;gap:9px}
+  header .mark{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#E0719A,#C0457A);display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 1px 2px rgba(0,0,0,0.12)}
+  header .week{display:flex;align-items:center}
+  header .kw{display:inline-flex;align-items:center;font-size:11px;font-weight:600;color:#fff;background:var(--ink);border-radius:6px;padding:3px 8px;letter-spacing:0.02em}
+  header .range{font-size:12px;color:var(--muted);margin-left:8px;font-variant-numeric:tabular-nums}
   header .spacer{flex:1}
   button{font:inherit;cursor:pointer;border:0.5px solid var(--line2);background:var(--surface);color:var(--ink);border-radius:8px;padding:7px 12px;transition:background .12s}
   button:hover{background:var(--bg)}
@@ -76,7 +81,7 @@
 </style>
 
 <header>
-  <h1>Weekly planner</h1>
+  <div class="brand"><span class="mark">📅</span><h1>Weekly planner</h1></div>
   <span class="week" id="weeklabel"></span>
   <span class="spacer"></span>
   <span class="save" id="savestate"></span>
@@ -164,7 +169,7 @@ function rollover(){
 
 function render(){
   const wc=weekContext();
-  document.getElementById("weeklabel").textContent="Week "+isoWeek(wc.weekStartISO)+" · "+fmtDate(new Date(wc.days[0]))+" – "+fmtDate(new Date(wc.days[4]));
+  document.getElementById("weeklabel").innerHTML='<span class="kw">KW '+isoWeek(wc.weekStartISO)+'</span><span class="range">'+fmtDate(new Date(wc.days[0]))+' – '+fmtDate(new Date(wc.days[4]))+'</span>';
   const board=document.getElementById("board");
   board.innerHTML="";
   board.appendChild(buildColumn("unscheduled","Backlog","",wc));
@@ -181,4 +186,160 @@ function buildColumn(dayKey,label,dateISO,wc){
   const totalH=cards.reduce((s,c)=>s+(Number(c.hours)||0),0);
 
   const head=document.createElement("div"); head.className="colhead";
-  const
+  const row1=document.createElement("div"); row1.className="row1";
+  const left=document.createElement("div");
+  left.innerHTML='<span class="day">'+label+'</span>'+(dateISO?' <span class="date">'+fmtDate(new Date(dateISO))+'</span>':'')+(dayKey===wc.targetISO?'<span class="todaytag">today</span>':'');
+  row1.appendChild(left);
+  if(dayKey!=="unscheduled"){ const h=document.createElement("span"); h.className="hrs"; h.textContent=fmtH(totalH); row1.appendChild(h); }
+  head.appendChild(row1);
+
+  if(dayKey!=="unscheduled"){
+    const cov=document.createElement("div"); cov.className="coverage";
+    const covered=new Set(cards.map(c=>c.client));
+    state.clients.forEach(cl=>{
+      const e=document.createElement("span"); e.className="cov";
+      e.textContent=cl.emoji||"•";
+      e.style.opacity=covered.has(cl.name)?"1":"0.22";
+      e.title=cl.name+(covered.has(cl.name)?" · planned":" · no block");
+      cov.appendChild(e);
+    });
+    head.appendChild(cov);
+  }
+  col.appendChild(head);
+
+  const wrap=document.createElement("div"); wrap.className="cards"; wrap.dataset.day=dayKey;
+  wrap.addEventListener("dragover",e=>{e.preventDefault();wrap.classList.add("dragover");});
+  wrap.addEventListener("dragleave",()=>wrap.classList.remove("dragover"));
+  wrap.addEventListener("drop",e=>{e.preventDefault();wrap.classList.remove("dragover");const id=e.dataTransfer.getData("text/plain");moveCard(id,dayKey);});
+  if(cards.length===0){ const em=document.createElement("div"); em.className="empty"; em.textContent=dayKey==="unscheduled"?"Backlog is empty":"Free"; wrap.appendChild(em); }
+  cards.forEach(c=>wrap.appendChild(buildCard(c)));
+  col.appendChild(wrap);
+
+  const add=document.createElement("button"); add.className="addbtn"; add.textContent="+ Add here";
+  add.onclick=()=>openModal(null,dayKey);
+  col.appendChild(add);
+  return col;
+}
+function buildCard(c){
+  const el=document.createElement("div"); el.className="card"+(c.done?" done":""); el.style.setProperty("--cl",clientColor(c.client));
+  el.style.minHeight=Math.max(42,Math.round((Number(c.hours)||0.5)*60))+"px";
+  el.draggable=true;
+  el.addEventListener("dragstart",e=>e.dataTransfer.setData("text/plain",c.id));
+  const top=document.createElement("div"); top.className="top";
+  const cb=document.createElement("input"); cb.type="checkbox"; cb.className="cb"; cb.checked=c.done;
+  cb.onclick=e=>{e.stopPropagation();c.done=cb.checked;persist();};
+  const title=document.createElement("div"); title.className="title"; title.textContent=c.title;
+  top.appendChild(cb); top.appendChild(title);
+  el.appendChild(top);
+  const meta=document.createElement("div"); meta.className="meta";
+  const cn=document.createElement("span"); cn.className="clientname"; cn.style.color=clientColor(c.client); cn.textContent=(clientEmoji(c.client)?clientEmoji(c.client)+" ":"")+c.client; meta.appendChild(cn);
+  if(c.hours){ const h=document.createElement("span"); h.className="chip"; h.textContent=fmtH(c.hours); meta.appendChild(h); }
+  const pr=PRIOS.find(p=>p[0]===c.priority);
+  if(pr){ const p=document.createElement("span"); p.className="prio"; p.innerHTML='<span class="pdot" style="background:'+pr[2]+'"></span>'+pr[1]; meta.appendChild(p); }
+  if(c.deadline){ const dl=document.createElement("span"); dl.className="deadline "+deadlineClass(c.deadline); dl.textContent="due "+fmtDate(new Date(c.deadline)); meta.appendChild(dl); }
+  if(c.blockedBy){ const b=document.createElement("span"); b.className="blocked"; b.textContent="⛓ "+c.blockedBy; meta.appendChild(b); }
+  el.appendChild(meta);
+  el.addEventListener("click",e=>{ if(e.target===cb) return; openModal(c,c.day); });
+  return el;
+}
+function sortCards(a,b){
+  if(a.done!==b.done) return a.done?1:-1;
+  if(PRANK[a.priority]!==PRANK[b.priority]) return PRANK[a.priority]-PRANK[b.priority];
+  if(a.deadline&&b.deadline&&a.deadline!==b.deadline) return a.deadline<b.deadline?-1:1;
+  if(a.deadline&&!b.deadline) return -1;
+  if(!a.deadline&&b.deadline) return 1;
+  return 0;
+}
+function deadlineClass(dl){ const today=iso(startMidnight(new Date())); if(dl<today) return "over"; const soon=iso(addDays(startMidnight(new Date()),2)); if(dl<=soon) return "soon"; return ""; }
+function fmtH(h){ if(!h) return "0h"; return (Math.round(h*100)/100)+"h"; }
+function isoWeek(dISO){ const d=new Date(dISO); const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())); const day=(t.getUTCDay()+6)%7; t.setUTCDate(t.getUTCDate()-day+3); const first=new Date(Date.UTC(t.getUTCFullYear(),0,4)); return 1+Math.round(((t-first)/86400000-3+((first.getUTCDay()+6)%7))/7); }
+
+function moveCard(id,day){ const c=state.cards.find(x=>x.id===id); if(c){c.day=day;persist();} }
+function persist(){ render(); saveState(); }
+
+function openModal(card,defaultDay){
+  const wc=weekContext();
+  const editing=!!card;
+  const dfDay=defaultDay||"unscheduled";
+  const dfDeadline=(dfDay!=="unscheduled")?dfDay:wc.targetISO;
+  const c=card||{id:uid(),client:state.clients[0]?.name||"",title:"",hours:1,priority:"normal",deadline:dfDeadline,blockedBy:"",done:false,day:dfDay};
+  const dayOpts=[["unscheduled","Backlog"]].concat(wc.days.map((iso,i)=>[iso,DAYNAMES[i]+" "+fmtDate(new Date(iso))]));
+  const modal=document.getElementById("modal");
+  modal.innerHTML=
+    '<h2>'+(editing?"Edit task":"New task")+'</h2>'+
+    '<div class="field"><label>Title <span style="color:var(--faint);font-weight:400">(one per line = several tasks)</span></label><textarea id="m_title" rows="2" placeholder="What needs doing? One task per line.">'+esc(c.title)+'</textarea></div>'+
+    '<div class="grid2">'+
+      '<div class="field"><label>Client</label><select id="m_client">'+state.clients.map(cl=>'<option value="'+esc(cl.name)+'" '+(cl.name===c.client?"selected":"")+'>'+(cl.emoji?cl.emoji+" ":"")+esc(cl.name)+'</option>').join("")+'</select></div>'+
+      '<div class="field"><label>Day</label><select id="m_day">'+dayOpts.map(o=>'<option value="'+o[0]+'" '+(o[0]===c.day?"selected":"")+'>'+o[1]+'</option>').join("")+'</select></div>'+
+    '</div>'+
+    '<div class="grid2">'+
+      '<div class="field"><label>Hours</label><select id="m_hours">'+HOUROPTS.map(h=>'<option value="'+h+'" '+(Number(c.hours)===h?"selected":"")+'>'+h+'h</option>').join("")+'</select></div>'+
+      '<div class="field"><label>Priority</label><select id="m_prio">'+PRIOS.map(p=>'<option value="'+p[0]+'" '+(p[0]===c.priority?"selected":"")+'>'+p[1]+'</option>').join("")+'</select></div>'+
+    '</div>'+
+    '<div class="field"><label>Deadline</label><input id="m_deadline" type="date" value="'+(c.deadline||"")+'"></div>'+
+    '<div class="field"><label>Blocked by (dependency)</label><input id="m_blocked" value="'+esc(c.blockedBy||"")+'" placeholder="e.g. waiting on someone"></div>'+
+    '<div class="modalfoot">'+
+      (editing?'<button class="danger" id="m_del">Delete</button>':'')+
+      '<span class="spacer"></span>'+
+      '<button id="m_cancel">Cancel</button>'+
+      '<button class="primary" id="m_save">'+(editing?"Save":"Add")+'</button>'+
+    '</div>';
+  showOverlay(true);
+  document.getElementById("m_title").focus();
+  const _dayEl=document.getElementById("m_day"), _dlEl=document.getElementById("m_deadline");
+  _dayEl.addEventListener("change",()=>{ if(_dayEl.value!=="unscheduled") _dlEl.value=_dayEl.value; });
+  document.getElementById("m_cancel").onclick=()=>showOverlay(false);
+  document.getElementById("m_save").onclick=()=>{
+    const titleRaw=document.getElementById("m_title").value;
+    const client=document.getElementById("m_client").value;
+    const day=document.getElementById("m_day").value;
+    const hours=parseFloat(document.getElementById("m_hours").value)||0;
+    const priority=document.getElementById("m_prio").value;
+    const deadline=document.getElementById("m_deadline").value;
+    const blockedBy=document.getElementById("m_blocked").value.trim();
+    if(editing){
+      c.title=titleRaw.trim()||"Untitled";
+      c.client=client; c.day=day; c.hours=hours; c.priority=priority; c.deadline=deadline; c.blockedBy=blockedBy;
+    } else {
+      const lines=titleRaw.split("\n").map(s=>s.trim()).filter(Boolean);
+      if(lines.length===0) lines.push("Untitled");
+      lines.forEach(t=>{ state.cards.push({id:uid(),client,day,hours,priority,deadline,blockedBy,done:false,title:t}); });
+    }
+    showOverlay(false); persist();
+  };
+  if(editing) document.getElementById("m_del").onclick=()=>{ state.cards=state.cards.filter(x=>x.id!==c.id); showOverlay(false); persist(); };
+}
+function openClients(){
+  const modal=document.getElementById("modal");
+  modal.innerHTML='<h2>Clients</h2><div id="clist"></div>'+
+    '<button id="m_addclient" style="width:100%;margin-top:4px">+ Client</button>'+
+    '<div class="modalfoot"><span class="spacer"></span><button class="primary" id="m_close">Done</button></div>';
+  const list=modal.querySelector("#clist");
+  function draw(){
+    list.innerHTML="";
+    state.clients.forEach((cl,idx)=>{
+      const row=document.createElement("div"); row.className="clientrow";
+      row.innerHTML='<input type="color" value="'+cl.color+'"><input class="emo" type="text" maxlength="3" value="'+esc(cl.emoji||"")+'" style="width:42px;text-align:center;flex:none"><input type="text" value="'+esc(cl.name)+'"><button class="ghost" title="Remove">✕</button>';
+      const[col,emo,txt,del]=row.children;
+      col.oninput=()=>{cl.color=col.value;persist();};
+      emo.onchange=()=>{cl.emoji=emo.value.trim();persist();};
+      txt.onchange=()=>{const old=cl.name;cl.name=txt.value.trim()||old;state.cards.forEach(c=>{if(c.client===old)c.client=cl.name});persist();};
+      del.onclick=()=>{state.clients.splice(idx,1);draw();persist();};
+      list.appendChild(row);
+    });
+  }
+  draw();
+  showOverlay(true);
+  modal.querySelector("#m_addclient").onclick=()=>{state.clients.push({name:"New client",color:"#888888",emoji:""});draw();persist();};
+  modal.querySelector("#m_close").onclick=()=>showOverlay(false);
+}
+function showOverlay(on){ document.getElementById("overlay").classList.toggle("open",on); }
+function esc(s){return String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));}
+
+document.getElementById("addBtn").onclick=()=>openModal(null,weekContext().targetISO);
+document.getElementById("clientsBtn").onclick=openClients;
+document.getElementById("resetBtn").onclick=()=>{ if(confirm("Delete all tasks? Clients stay.")){ state.cards=[]; persist(); } };
+document.getElementById("overlay").addEventListener("click",e=>{ if(e.target.id==="overlay") showOverlay(false); });
+
+(async()=>{ await loadState(); rollover(); render(); saveState(); })();
+</script>
