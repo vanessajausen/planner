@@ -216,6 +216,7 @@ function buildColumn(dayKey,label,dateISO,wc){
 }
 function buildCard(c){
   const el=document.createElement("div"); el.className="card"+(c.done?" done":""); el.style.setProperty("--cl",clientColor(c.client));
+  el.style.minHeight=Math.max(42,Math.round((Number(c.hours)||0.5)*60))+"px";
   el.draggable=true;
   el.addEventListener("dragstart",e=>e.dataTransfer.setData("text/plain",c.id));
   const top=document.createElement("div"); top.className="top";
@@ -253,12 +254,14 @@ function persist(){ render(); saveState(); }
 function openModal(card,defaultDay){
   const wc=weekContext();
   const editing=!!card;
-  const c=card||{id:uid(),client:state.clients[0]?.name||"",title:"",hours:1,priority:"normal",deadline:"",blockedBy:"",done:false,day:defaultDay||"unscheduled"};
+  const dfDay=defaultDay||"unscheduled";
+  const dfDeadline=(dfDay!=="unscheduled")?dfDay:wc.targetISO;
+  const c=card||{id:uid(),client:state.clients[0]?.name||"",title:"",hours:1,priority:"normal",deadline:dfDeadline,blockedBy:"",done:false,day:dfDay};
   const dayOpts=[["unscheduled","Backlog"]].concat(wc.days.map((iso,i)=>[iso,DAYNAMES[i]+" "+fmtDate(new Date(iso))]));
   const modal=document.getElementById("modal");
   modal.innerHTML=
     '<h2>'+(editing?"Edit task":"New task")+'</h2>'+
-    '<div class="field"><label>Title</label><input id="m_title" value="'+esc(c.title)+'" placeholder="What needs doing?"></div>'+
+    '<div class="field"><label>Title <span style="color:var(--faint);font-weight:400">(one per line = several tasks)</span></label><textarea id="m_title" rows="2" placeholder="What needs doing? One task per line.">'+esc(c.title)+'</textarea></div>'+
     '<div class="grid2">'+
       '<div class="field"><label>Client</label><select id="m_client">'+state.clients.map(cl=>'<option value="'+esc(cl.name)+'" '+(cl.name===c.client?"selected":"")+'>'+(cl.emoji?cl.emoji+" ":"")+esc(cl.name)+'</option>').join("")+'</select></div>'+
       '<div class="field"><label>Day</label><select id="m_day">'+dayOpts.map(o=>'<option value="'+o[0]+'" '+(o[0]===c.day?"selected":"")+'>'+o[1]+'</option>').join("")+'</select></div>'+
@@ -277,16 +280,25 @@ function openModal(card,defaultDay){
     '</div>';
   showOverlay(true);
   document.getElementById("m_title").focus();
+  const _dayEl=document.getElementById("m_day"), _dlEl=document.getElementById("m_deadline");
+  _dayEl.addEventListener("change",()=>{ if(_dayEl.value!=="unscheduled") _dlEl.value=_dayEl.value; });
   document.getElementById("m_cancel").onclick=()=>showOverlay(false);
   document.getElementById("m_save").onclick=()=>{
-    c.title=document.getElementById("m_title").value.trim()||"Untitled";
-    c.client=document.getElementById("m_client").value;
-    c.day=document.getElementById("m_day").value;
-    c.hours=parseFloat(document.getElementById("m_hours").value)||0;
-    c.priority=document.getElementById("m_prio").value;
-    c.deadline=document.getElementById("m_deadline").value;
-    c.blockedBy=document.getElementById("m_blocked").value.trim();
-    if(!editing) state.cards.push(c);
+    const titleRaw=document.getElementById("m_title").value;
+    const client=document.getElementById("m_client").value;
+    const day=document.getElementById("m_day").value;
+    const hours=parseFloat(document.getElementById("m_hours").value)||0;
+    const priority=document.getElementById("m_prio").value;
+    const deadline=document.getElementById("m_deadline").value;
+    const blockedBy=document.getElementById("m_blocked").value.trim();
+    if(editing){
+      c.title=titleRaw.trim()||"Untitled";
+      c.client=client; c.day=day; c.hours=hours; c.priority=priority; c.deadline=deadline; c.blockedBy=blockedBy;
+    } else {
+      const lines=titleRaw.split("\n").map(s=>s.trim()).filter(Boolean);
+      if(lines.length===0) lines.push("Untitled");
+      lines.forEach(t=>{ state.cards.push({id:uid(),client,day,hours,priority,deadline,blockedBy,done:false,title:t}); });
+    }
     showOverlay(false); persist();
   };
   if(editing) document.getElementById("m_del").onclick=()=>{ state.cards=state.cards.filter(x=>x.id!==c.id); showOverlay(false); persist(); };
