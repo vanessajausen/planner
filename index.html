@@ -116,11 +116,16 @@
   .card.drop-before{box-shadow:0 -2px 0 var(--ink)}
   .col.focus{flex:0 0 460px}
   .focusbtn.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .navbtn{border:none;background:none;color:var(--muted);font-size:17px;line-height:1;padding:2px 7px;cursor:pointer;border-radius:6px}
+  .navbtn:hover{background:var(--bg);color:var(--ink)}
+  .week{cursor:pointer}
 </style>
 
 <header>
   <div class="brand"><span class="mark">📅</span><h1>Weekly planner</h1></div>
-  <span class="week" id="weeklabel"></span>
+  <button id="prevWk" class="navbtn" title="Previous week">‹</button>
+  <span class="week" id="weeklabel" title="Jump to current week"></span>
+  <button id="nextWk" class="navbtn" title="Next week">›</button>
   <span class="spacer"></span>
   <span class="save" id="savestate"></span>
   <button class="primary" id="addBtn">+ Task</button>
@@ -144,6 +149,7 @@ const DAILY_TARGET=7;
 
 let state=null, storageMode="memory";
 let expandedDone={};
+let weekOffset=0;
 
 function startMidnight(d){const x=new Date(d);x.setHours(0,0,0,0);return x;}
 function getMonday(d){const x=startMidnight(d);const off=(x.getDay()+6)%7;x.setDate(x.getDate()-off);return x;}
@@ -151,14 +157,21 @@ function addDays(d,n){const x=new Date(d);x.setDate(x.getDate()+n);return x;}
 function iso(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
 function fmtDate(d){return String(d.getMonth()+1).padStart(2,"0")+"/"+String(d.getDate()).padStart(2,"0");}
 
-function weekContext(){
-  const now=new Date(); const dow=now.getDay();
-  let weekStart, targetISO;
-  if(dow===0||dow===6){ weekStart=addDays(getMonday(now),7); targetISO=iso(weekStart); }
-  else { weekStart=getMonday(now); targetISO=iso(startMidnight(now)); }
+function weekContext(offset){
+  offset=offset||0;
+  const now=new Date();
+  const weekStart=addDays(getMonday(now),offset*7);
   const days=[]; for(let i=0;i<5;i++){const d=addDays(weekStart,i);days.push(iso(d));}
-  return {weekStartISO:iso(weekStart), targetISO, days};
+  const todayISO=iso(startMidnight(now));
+  const targetISO=days.indexOf(todayISO)>=0?todayISO:null;
+  return {weekStartISO:iso(weekStart), targetISO, days, offset};
 }
+function isWeekend(){ const d=new Date().getDay(); return d===0||d===6; }
+function defaultOffset(){ return isWeekend()?1:0; }
+function rollTargetISO(){ const now=new Date(); if(isWeekend()) return iso(addDays(getMonday(now),7)); return iso(startMidnight(now)); }
+function workToday(){ return rollTargetISO(); }
+function activeWeek(){ return weekContext(defaultOffset()); }
+function monthlyDate(y,m,dom){ const last=new Date(y,m+1,0).getDate(); let d=new Date(y,m,Math.min(dom,last)); if(d.getDay()===6) d=addDays(d,-1); else if(d.getDay()===0) d=addDays(d,1); return d; }
 
 async function loadState(){
   let raw=null;
@@ -203,51 +216,64 @@ function clientColor(name){const c=state.clients.find(c=>c.name===name);return c
 function clientEmoji(name){const c=state.clients.find(c=>c.name===name);return c&&c.emoji?c.emoji:"";}
 
 function rollover(){
-  const wc=weekContext(); const today=wc.targetISO; const ws=wc.weekStartISO;
+  const today=rollTargetISO(); const ws=weekContext(0).weekStartISO;
   let changed=false;
   state.cards.forEach(c=>{
-    if(c.repeat==="weekly") return;
+    if(c.repeat!=="none") return;
     if(c.day==="unscheduled") return;
     if(!cardDone(c) && c.day<today){ c.day=today; changed=true; }
   });
   const before=state.cards.length;
-  state.cards=state.cards.filter(c=> !(c.repeat!=="weekly" && cardDone(c) && c.day!=="unscheduled" && c.day<ws));
+  state.cards=state.cards.filter(c=> !(c.repeat==="none" && cardDone(c) && c.day!=="unscheduled" && c.day<ws));
   if(state.cards.length!==before) changed=true;
   return changed;
 }
 
 function ensureRecurring(){
-  const wc=weekContext();
+  const aw=activeWeek();
+  const today=new Date(workToday());
+  const ym=today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
   state.cards.forEach(c=>{
-    if(c.repeat==="weekly"){
+    if(c.repeat==="daily"){
+      if(c.lastDay!==workToday()){ c.subs.forEach(s=>s.done=false); c.lastDay=workToday(); }
+      c.day=workToday();
+    } else if(c.repeat==="weekly"){
       const dow=(typeof c.repeatDow==="number")?Math.max(0,Math.min(4,c.repeatDow)):0;
-      if(c.lastWeek!==wc.weekStartISO){ c.subs.forEach(s=>s.done=false); c.lastWeek=wc.weekStartISO; }
-      c.day=wc.days[dow];
+      if(c.lastWeek!==aw.weekStartISO){ c.subs.forEach(s=>s.done=false); c.lastWeek=aw.weekStartISO; }
+      c.day=aw.days[dow];
+    } else if(c.repeat==="monthly"){
+      const dom=(typeof c.repeatDom==="number")?c.repeatDom:1;
+      if(c.lastMonth!==ym){ c.subs.forEach(s=>s.done=false); c.lastMonth=ym; }
+      c.day=iso(monthlyDate(today.getFullYear(),today.getMonth(),dom));
     }
   });
 }
 
 function render(){
-  const wc=weekContext();
-  document.getElementById("weeklabel").innerHTML='<span class="kw">KW '+isoWeek(wc.weekStartISO)+'</span><span class="range">'+fmtDate(new Date(wc.days[0]))+' – '+fmtDate(new Date(wc.days[4]))+'</span>';
+  const vw=weekContext(weekOffset);
+  document.getElementById("weeklabel").innerHTML='<span class="kw">KW '+isoWeek(vw.weekStartISO)+'</span><span class="range">'+fmtDate(new Date(vw.days[0]))+' – '+fmtDate(new Date(vw.days[4]))+'</span>';
   const fb=document.getElementById("focusBtn");
   if(fb){ fb.className="focusbtn"+(state.view==="today"?" on":""); fb.textContent=state.view==="today"?"Show week":"Focus today"; }
+  const pv=document.getElementById("prevWk"), nx=document.getElementById("nextWk");
+  if(pv) pv.style.visibility=(state.view==="today")?"hidden":"visible";
+  if(nx) nx.style.visibility=(state.view==="today")?"hidden":"visible";
   const board=document.getElementById("board");
   board.innerHTML="";
-  board.appendChild(buildColumn("unscheduled","Backlog","",wc));
+  board.appendChild(buildColumn("unscheduled","Backlog","",vw));
   if(state.view==="today"){
-    let idx=wc.days.indexOf(wc.targetISO); if(idx<0) idx=0;
-    board.appendChild(buildColumn(wc.days[idx],DAYNAMES[idx],wc.days[idx],wc,true));
+    const t=workToday(); const di=Math.max(0,Math.min(4,(new Date(t).getDay()+6)%7));
+    board.appendChild(buildColumn(t,DAYNAMES[di],t,vw,true));
   } else {
-    wc.days.forEach((iso,i)=>{ board.appendChild(buildColumn(iso,DAYNAMES[i],iso,wc)); });
+    vw.days.forEach((d,i)=>{ board.appendChild(buildColumn(d,DAYNAMES[i],d,vw)); });
   }
 }
 function buildColumn(dayKey,label,dateISO,wc,focus){
   const col=document.createElement("div");
   col.className="col"+(dayKey==="unscheduled"?" unscheduled":"")+(focus?" focus":"");
+  const realToday=iso(startMidnight(new Date()));
   if(dayKey!=="unscheduled"){
-    if(dayKey===wc.targetISO) col.className+=" today";
-    else if(dayKey<wc.targetISO) col.className+=" past";
+    if(dayKey===realToday) col.className+=" today";
+    else if(dayKey<realToday) col.className+=" past";
   }
   const all=state.cards.filter(c=>c.day===dayKey).sort(sortCards);
   const active=all.filter(c=>!cardDone(c));
@@ -257,7 +283,7 @@ function buildColumn(dayKey,label,dateISO,wc,focus){
   const head=document.createElement("div"); head.className="colhead";
   const row1=document.createElement("div"); row1.className="row1";
   const left=document.createElement("div");
-  left.innerHTML='<span class="day">'+label+'</span>'+(dateISO?' <span class="date">'+fmtDate(new Date(dateISO))+'</span>':'')+(dayKey===wc.targetISO?'<span class="todaytag">today</span>':'');
+  left.innerHTML='<span class="day">'+label+'</span>'+(dateISO?' <span class="date">'+fmtDate(new Date(dateISO))+'</span>':'')+(dayKey===realToday?'<span class="todaytag">today</span>':'');
   row1.appendChild(left);
   if(dayKey!=="unscheduled"){ const h=document.createElement("span"); h.className="hrs"; h.textContent=fmtH(totalH); row1.appendChild(h); }
   head.appendChild(row1);
@@ -324,7 +350,7 @@ function buildCard(c){
   const pr=PRIOS.find(p=>p[0]===c.priority);
   if(pr){ const p=document.createElement("span"); p.className="prio"; p.innerHTML='<span class="pdot" style="background:'+pr[2]+'"></span>'+pr[1]; meta.appendChild(p); }
   if(c.deadline){ const dl=document.createElement("span"); dl.className="deadline "+deadlineClass(c.deadline); dl.textContent="due "+fmtDate(new Date(c.deadline)); meta.appendChild(dl); }
-  if(c.repeat==="weekly"){ const rc=document.createElement("span"); rc.className="chip recur"; rc.textContent="↻ weekly"; meta.appendChild(rc); }
+  if(c.repeat && c.repeat!=="none"){ const rc=document.createElement("span"); rc.className="chip recur"; rc.textContent="↻ "+c.repeat; meta.appendChild(rc); }
   if(c.blockedBy){ const b=document.createElement("span"); b.className="blocked"; b.textContent="⛓ "+c.blockedBy; meta.appendChild(b); }
   if(c.subs && c.subs.length){ const dn=c.subs.filter(s=>s.done).length; const sc=document.createElement("span"); sc.className="chip"; sc.textContent="☑ "+dn+"/"+c.subs.length; meta.appendChild(sc); }
   el.appendChild(meta);
@@ -359,14 +385,14 @@ function toggleSnooze(el,c){
   el.appendChild(m);
 }
 function snooze(c,kind){
-  const wc=weekContext();
-  if(kind==="backlog"){ c.day="unscheduled"; if(c.repeat==="weekly") c.repeat="none"; }
+  if(kind==="backlog"){ c.day="unscheduled"; if(c.repeat&&c.repeat!=="none") c.repeat="none"; }
   else {
-    let base=(c.day && c.day!=="unscheduled")?new Date(c.day):new Date(wc.targetISO);
+    let base=(c.day && c.day!=="unscheduled")?new Date(c.day):new Date(workToday());
     if(kind==="tomorrow"){ base=addDays(base,1); while(base.getDay()===0||base.getDay()===6) base=addDays(base,1); }
     if(kind==="nextweek"){ base=addDays(base,7); }
     c.day=iso(base);
     if(c.repeat==="weekly"){ c.repeatDow=(base.getDay()+6)%7; }
+    if(c.repeat==="monthly"){ c.repeatDom=base.getDate(); }
   }
   document.querySelectorAll(".snoozemenu").forEach(m=>m.remove());
   persist();
@@ -375,9 +401,10 @@ function reorder(draggedId,day,beforeId){
   const dragged=state.cards.find(x=>x.id===draggedId);
   if(!dragged) return;
   dragged.day=day;
-  if(dragged.repeat==="weekly"){
+  if(dragged.repeat && dragged.repeat!=="none"){
     if(day==="unscheduled") dragged.repeat="none";
-    else { dragged.repeatDow=(new Date(day).getDay()+6)%7; dragged.lastWeek=weekContext().weekStartISO; }
+    else if(dragged.repeat==="weekly"){ dragged.repeatDow=(new Date(day).getDay()+6)%7; }
+    else if(dragged.repeat==="monthly"){ dragged.repeatDom=new Date(day).getDate(); }
   }
   let list=state.cards.filter(c=>c.day===day && c.id!==draggedId).sort(sortCards);
   let idx=beforeId?list.findIndex(c=>c.id===beforeId):list.length;
@@ -408,12 +435,13 @@ function moveCard(id,day){ const c=state.cards.find(x=>x.id===id); if(c){c.day=d
 function persist(){ render(); saveState(); }
 
 function openModal(card,defaultDay){
-  const wc=weekContext();
+  const wc=weekContext(weekOffset);
   const editing=!!card;
   const dfDay=defaultDay||"unscheduled";
-  const dfDeadline=(dfDay!=="unscheduled")?dfDay:wc.targetISO;
+  const dfDeadline=(dfDay && dfDay!=="unscheduled")?dfDay:(wc.targetISO||workToday());
   const c=card||{id:uid(),client:state.clients[0]?.name||"",title:"",hours:1,priority:"normal",deadline:dfDeadline,blockedBy:"",done:false,day:dfDay,subs:[]};
-  const dayOpts=[["unscheduled","Backlog"]].concat(wc.days.map((iso,i)=>[iso,DAYNAMES[i]+" "+fmtDate(new Date(iso))]));
+  let dayOpts=[["unscheduled","Backlog"]].concat(wc.days.map((d,i)=>[d,DAYNAMES[i]+" "+fmtDate(new Date(d))]));
+  if(editing && c.day && c.day!=="unscheduled" && wc.days.indexOf(c.day)<0){ dayOpts.push([c.day,fmtDate(new Date(c.day))+" · KW"+isoWeek(c.day)]); }
   const modal=document.getElementById("modal");
   modal.innerHTML=
     '<h2>'+(editing?"Edit card":"New card")+'</h2>'+
@@ -426,7 +454,7 @@ function openModal(card,defaultDay){
       '<div class="field"><label>Priority</label><select id="m_prio">'+PRIOS.map(p=>'<option value="'+p[0]+'" '+(p[0]===c.priority?"selected":"")+'>'+p[1]+'</option>').join("")+'</select></div>'+
     '</div>'+
     '<div class="field"><label>Deadline</label><input id="m_deadline" type="date" value="'+(c.deadline||"")+'"></div>'+
-    '<div class="field"><label>Repeat</label><select id="m_repeat"><option value="none" '+(c.repeat!=="weekly"?"selected":"")+'>No repeat</option><option value="weekly" '+(c.repeat==="weekly"?"selected":"")+'>Weekly (same weekday)</option></select></div>'+
+    '<div class="field"><label>Repeat</label><select id="m_repeat"><option value="none" '+(!c.repeat||c.repeat==="none"?"selected":"")+'>No repeat</option><option value="daily" '+(c.repeat==="daily"?"selected":"")+'>Daily (weekdays)</option><option value="weekly" '+(c.repeat==="weekly"?"selected":"")+'>Weekly (same weekday)</option><option value="monthly" '+(c.repeat==="monthly"?"selected":"")+'>Monthly (same date)</option></select></div>'+
     '<div class="field"><label>Blocked by (dependency)</label><input id="m_blocked" value="'+esc(c.blockedBy||"")+'" placeholder="e.g. waiting on someone"></div>'+
     '<div class="field"><label>To-dos</label><div id="m_sublist" class="sublist"></div><button type="button" id="m_addsub" class="subadd">+ Add to-do</button></div>'+
     '<div class="modalfoot">'+
@@ -467,17 +495,27 @@ function openModal(card,defaultDay){
     const priority=document.getElementById("m_prio").value;
     const deadline=document.getElementById("m_deadline").value;
     const blockedBy=document.getElementById("m_blocked").value.trim();
-    const repeat=document.getElementById("m_repeat").value;
+    const repeatSel=document.getElementById("m_repeat").value;
     const subs=subsDraft.map(s=>({t:s.t.trim(),done:s.done})).filter(s=>s.t);
-    const rep=(repeat==="weekly" && day!=="unscheduled")?"weekly":"none";
+    let rep="none";
+    if(repeatSel==="daily") rep="daily";
+    else if(repeatSel==="weekly" && day!=="unscheduled") rep="weekly";
+    else if(repeatSel==="monthly" && day!=="unscheduled") rep="monthly";
     const repeatDow=rep==="weekly"?(new Date(day).getDay()+6)%7:null;
+    const repeatDom=rep==="monthly"?new Date(day).getDate():null;
+    const _t=new Date(workToday()); const _ym=_t.getFullYear()+"-"+String(_t.getMonth()+1).padStart(2,"0");
     if(editing){
       c.client=client; c.day=day; c.hours=hours; c.priority=priority; c.deadline=deadline; c.blockedBy=blockedBy; c.subs=subs; c.repeat=rep;
-      if(rep==="weekly"){ c.repeatDow=repeatDow; if(!c.lastWeek) c.lastWeek=weekContext().weekStartISO; }
+      c.repeatDow=repeatDow; c.repeatDom=repeatDom;
+      if(rep==="weekly") c.lastWeek=activeWeek().weekStartISO;
+      if(rep==="daily") c.lastDay=workToday();
+      if(rep==="monthly") c.lastMonth=_ym;
     } else {
       if(subs.length===0){ showOverlay(false); return; }
       const nc={id:uid(),client,day,hours,priority,deadline,blockedBy,subs,repeat:rep};
-      if(rep==="weekly"){ nc.repeatDow=repeatDow; nc.lastWeek=weekContext().weekStartISO; }
+      if(rep==="weekly"){ nc.repeatDow=repeatDow; nc.lastWeek=activeWeek().weekStartISO; }
+      if(rep==="daily"){ nc.lastDay=workToday(); }
+      if(rep==="monthly"){ nc.repeatDom=repeatDom; nc.lastMonth=_ym; }
       state.cards.push(nc);
     }
     showOverlay(false); persist();
@@ -511,12 +549,15 @@ function openClients(){
 function showOverlay(on){ document.getElementById("overlay").classList.toggle("open",on); }
 function esc(s){return String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));}
 
-document.getElementById("addBtn").onclick=()=>openModal(null,weekContext().targetISO);
+document.getElementById("addBtn").onclick=()=>openModal(null,workToday());
 document.getElementById("focusBtn").onclick=()=>{ state.view=(state.view==="today")?"week":"today"; persist(); };
 document.getElementById("clientsBtn").onclick=openClients;
 document.getElementById("resetBtn").onclick=()=>{ if(confirm("Delete all tasks? Clients stay.")){ state.cards=[]; persist(); } };
+document.getElementById("prevWk").onclick=()=>{ weekOffset--; render(); };
+document.getElementById("nextWk").onclick=()=>{ weekOffset++; render(); };
+document.getElementById("weeklabel").onclick=()=>{ weekOffset=defaultOffset(); render(); };
 document.getElementById("overlay").addEventListener("click",e=>{ if(e.target.id==="overlay") showOverlay(false); });
 document.addEventListener("click",e=>{ if(!e.target.closest(".snoozemenu") && !(e.target.classList&&e.target.classList.contains("snoozebtn"))) document.querySelectorAll(".snoozemenu").forEach(m=>m.remove()); });
 
-(async()=>{ await loadState(); ensureRecurring(); rollover(); render(); saveState(); })();
+(async()=>{ await loadState(); weekOffset=defaultOffset(); ensureRecurring(); rollover(); render(); saveState(); })();
 </script>
