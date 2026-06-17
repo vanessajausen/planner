@@ -482,7 +482,7 @@ function openModal(card,defaultDay){
     }
     showOverlay(false); persist();
   };
-  if(editing) document.getElementById("m_del").onclick=()=>{ state.cards=state.cards.filter(x=>x.id!==c.id); showOverlay(false); persist(); };
+  if(editing) document.getElementById("m_del").onclick=()=>{ if(confirm("Delete this card? This can't be undone.")){ state.cards=state.cards.filter(x=>x.id!==c.id); showOverlay(false); persist(); } };
 }
 function openClients(){
   const modal=document.getElementById("modal");
