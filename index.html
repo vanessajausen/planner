@@ -129,6 +129,12 @@
   .planlab{font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .planbtns{display:flex;gap:4px;flex:none}
   .planbtns button{padding:4px 8px;font-size:11px}
+  .subitem{display:flex;flex-direction:column;gap:4px}
+  .slink{border:none;background:none;color:var(--faint);cursor:pointer;font-size:12px;padding:2px 4px;border-radius:6px;opacity:.45;flex:none}
+  .slink.on{opacity:1}
+  .slink:hover{background:var(--bg);opacity:1}
+  .slinkinput{font:inherit;font-size:12px;padding:5px 8px;border:0.5px solid var(--line2);border-radius:7px;background:var(--surface);color:var(--ink);margin-left:23px}
+  .sublink{margin-left:auto;text-decoration:none;font-size:11px;flex:none}
 </style>
 
 <header>
@@ -213,8 +219,10 @@ async function loadState(){
     if(c.link===undefined) c.link="";
     if(c.notes===undefined) c.notes="";
     if(typeof c.rollCount!=="number") c.rollCount=0;
+    c.subs.forEach(s=>{ if(s.link===undefined) s.link=""; });
   });
   if(!state.clients.some(c=>c.name==="Koordination")){ state.clients.push({name:"Koordination",color:"#7A6FF0",emoji:"🧭"}); }
+  if(!state.clients.some(c=>c.name==="Call")){ state.clients.push({name:"Call",color:"#2E8B9E",emoji:"☎"}); }
   if(state.view!=="today") state.view="week";
   const EMO={};
   state.clients.forEach(c=>{ if(!c.emoji && EMO[c.name]) c.emoji=EMO[c.name]; });
@@ -391,6 +399,7 @@ function buildCard(c){
       const box=document.createElement("span"); box.className="scb"+(s.done?" on":"");
       const tx=document.createElement("span"); tx.className="stext"; tx.textContent=s.t;
       r.appendChild(box); r.appendChild(tx);
+      if(s.link){ const a=document.createElement("a"); a.className="sublink"; a.href=s.link; a.target="_blank"; a.rel="noopener"; a.textContent="🔗"; a.title=s.link; a.onclick=e=>{ e.stopPropagation(); }; r.appendChild(a); }
       r.addEventListener("click",e=>{ e.stopPropagation(); s.done=!s.done; persist(); });
       sb.appendChild(r);
     });
@@ -497,27 +506,37 @@ function openModal(card,defaultDay){
       '<button class="primary" id="m_save">'+(editing?"Save":"Add")+'</button>'+
     '</div>';
   showOverlay(true);
-  let subsDraft=(c.subs||[]).map(s=>({t:s.t,done:!!s.done}));
-  if(!editing && subsDraft.length===0) subsDraft.push({t:"",done:false});
+  let subsDraft=(c.subs||[]).map(s=>({t:s.t,done:!!s.done,link:s.link||""}));
+  if(!editing && subsDraft.length===0) subsDraft.push({t:"",done:false,link:""});
   const subListEl=document.getElementById("m_sublist");
+  const subLinkOpen=new Set();
   function drawSubs(focusIdx){
     subListEl.innerHTML="";
     subsDraft.forEach((s,i)=>{
+      const item=document.createElement("div"); item.className="subitem";
       const row=document.createElement("div"); row.className="subedit";
       const box=document.createElement("span"); box.className="sbox"+(s.done?" on":"");
       box.onclick=()=>{ s.done=!s.done; drawSubs(); };
       const inp=document.createElement("input"); inp.value=s.t; if(s.done) inp.className="done"; inp.placeholder="Subtask";
       inp.oninput=()=>{ s.t=inp.value; };
-      inp.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); subsDraft.splice(i+1,0,{t:"",done:false}); drawSubs(i+1); } };
+      inp.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); subsDraft.splice(i+1,0,{t:"",done:false,link:""}); drawSubs(i+1); } };
+      const lb=document.createElement("button"); lb.type="button"; lb.className="slink"+((s.link||subLinkOpen.has(i))?" on":""); lb.textContent="🔗"; lb.title="Add a link to this to-do";
+      lb.onclick=()=>{ if(subLinkOpen.has(i)) subLinkOpen.delete(i); else subLinkOpen.add(i); drawSubs(); };
       const rem=document.createElement("button"); rem.type="button"; rem.className="srem"; rem.textContent="✕";
-      rem.onclick=()=>{ subsDraft.splice(i,1); drawSubs(); };
-      row.appendChild(box); row.appendChild(inp); row.appendChild(rem);
-      subListEl.appendChild(row);
+      rem.onclick=()=>{ subsDraft.splice(i,1); subLinkOpen.delete(i); drawSubs(); };
+      row.appendChild(box); row.appendChild(inp); row.appendChild(lb); row.appendChild(rem);
+      item.appendChild(row);
+      if(s.link || subLinkOpen.has(i)){
+        const lr=document.createElement("input"); lr.className="slinkinput"; lr.value=s.link||""; lr.placeholder="https://... (Slack / ClickUp / Figma)";
+        lr.oninput=()=>{ s.link=lr.value; };
+        item.appendChild(lr);
+      }
+      subListEl.appendChild(item);
     });
-    if(focusIdx!=null){ const inputs=subListEl.querySelectorAll("input"); if(inputs[focusIdx]) inputs[focusIdx].focus(); }
+    if(focusIdx!=null){ const inputs=subListEl.querySelectorAll(".subedit input"); if(inputs[focusIdx]) inputs[focusIdx].focus(); }
   }
   drawSubs(0);
-  document.getElementById("m_addsub").onclick=()=>{ subsDraft.push({t:"",done:false}); drawSubs(subsDraft.length-1); };
+  document.getElementById("m_addsub").onclick=()=>{ subsDraft.push({t:"",done:false,link:""}); drawSubs(subsDraft.length-1); };
   const _dayEl=document.getElementById("m_day"), _dlEl=document.getElementById("m_deadline");
   _dayEl.addEventListener("change",()=>{ if(_dayEl.value!=="unscheduled") _dlEl.value=_dayEl.value; });
   document.getElementById("m_cancel").onclick=()=>showOverlay(false);
@@ -531,7 +550,7 @@ function openModal(card,defaultDay){
     const link=document.getElementById("m_link").value.trim();
     const notes=document.getElementById("m_notes").value.trim();
     const repeatSel=document.getElementById("m_repeat").value;
-    const subs=subsDraft.map(s=>({t:s.t.trim(),done:s.done})).filter(s=>s.t);
+    const subs=subsDraft.map(s=>({t:s.t.trim(),done:s.done,link:(s.link||"").trim()})).filter(s=>s.t);
     let rep="none";
     if(repeatSel==="daily") rep="daily";
     else if(repeatSel==="weekly" && day!=="unscheduled") rep="weekly";
@@ -596,8 +615,9 @@ function importData(file){
     if(!obj||!Array.isArray(obj.clients)||!Array.isArray(obj.cards)){ alert("That doesn't look like a planner backup."); return; }
     if(!confirm("Replace your current board with this backup? Your current data will be overwritten.")) return;
     state=obj;
-    state.cards.forEach(c=>{ if(!Array.isArray(c.subs)) c.subs=[]; if(c.link===undefined)c.link=""; if(c.notes===undefined)c.notes=""; if(typeof c.rollCount!=="number")c.rollCount=0; if(!c.repeat)c.repeat="none"; });
+    state.cards.forEach(c=>{ if(!Array.isArray(c.subs)) c.subs=[]; c.subs.forEach(s=>{ if(s.link===undefined)s.link=""; }); if(c.link===undefined)c.link=""; if(c.notes===undefined)c.notes=""; if(typeof c.rollCount!=="number")c.rollCount=0; if(!c.repeat)c.repeat="none"; });
     if(!state.clients.some(c=>c.name==="Koordination")) state.clients.push({name:"Koordination",color:"#7A6FF0",emoji:"🧭"});
+    if(!state.clients.some(c=>c.name==="Call")) state.clients.push({name:"Call",color:"#2E8B9E",emoji:"☎"});
     if(state.view!=="today") state.view="week";
     ensureRecurring(); rollover(); persist();
   };
