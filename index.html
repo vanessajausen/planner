@@ -54,6 +54,12 @@
   .card .cb:checked::after{content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
   .card .meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px;font-size:11px;color:var(--muted)}
   .card .clientname{font-weight:600}
+  .subs{margin-top:7px;display:flex;flex-direction:column;gap:4px}
+  .subrow{display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;color:var(--ink)}
+  .subrow .scb{width:13px;height:13px;border:1.5px solid var(--line2);border-radius:3px;flex:none;position:relative;display:inline-block}
+  .subrow .scb.on{background:#4F8A4D;border-color:#4F8A4D}
+  .subrow .scb.on::after{content:"";position:absolute;left:3.5px;top:1px;width:3px;height:6px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+  .subrow.sdone .stext{text-decoration:line-through;color:var(--faint)}
   .chip{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:5px;background:var(--bg);font-variant-numeric:tabular-nums}
   .prio{display:inline-flex;align-items:center;gap:3px}
   .pdot{width:7px;height:7px;border-radius:50%}
@@ -238,7 +244,20 @@ function buildCard(c){
   if(pr){ const p=document.createElement("span"); p.className="prio"; p.innerHTML='<span class="pdot" style="background:'+pr[2]+'"></span>'+pr[1]; meta.appendChild(p); }
   if(c.deadline){ const dl=document.createElement("span"); dl.className="deadline "+deadlineClass(c.deadline); dl.textContent="due "+fmtDate(new Date(c.deadline)); meta.appendChild(dl); }
   if(c.blockedBy){ const b=document.createElement("span"); b.className="blocked"; b.textContent="⛓ "+c.blockedBy; meta.appendChild(b); }
+  if(c.subs && c.subs.length){ const dn=c.subs.filter(s=>s.done).length; const sc=document.createElement("span"); sc.className="chip"; sc.textContent="☑ "+dn+"/"+c.subs.length; meta.appendChild(sc); }
   el.appendChild(meta);
+  if(c.subs && c.subs.length){
+    const sb=document.createElement("div"); sb.className="subs";
+    c.subs.forEach(s=>{
+      const r=document.createElement("div"); r.className="subrow"+(s.done?" sdone":"");
+      const box=document.createElement("span"); box.className="scb"+(s.done?" on":"");
+      const tx=document.createElement("span"); tx.className="stext"; tx.textContent=s.t;
+      r.appendChild(box); r.appendChild(tx);
+      r.addEventListener("click",e=>{ e.stopPropagation(); s.done=!s.done; persist(); });
+      sb.appendChild(r);
+    });
+    el.appendChild(sb);
+  }
   el.addEventListener("click",e=>{ if(e.target===cb) return; openModal(c,c.day); });
   return el;
 }
@@ -262,7 +281,7 @@ function openModal(card,defaultDay){
   const editing=!!card;
   const dfDay=defaultDay||"unscheduled";
   const dfDeadline=(dfDay!=="unscheduled")?dfDay:wc.targetISO;
-  const c=card||{id:uid(),client:state.clients[0]?.name||"",title:"",hours:1,priority:"normal",deadline:dfDeadline,blockedBy:"",done:false,day:dfDay};
+  const c=card||{id:uid(),client:state.clients[0]?.name||"",title:"",hours:1,priority:"normal",deadline:dfDeadline,blockedBy:"",done:false,day:dfDay,subs:[]};
   const dayOpts=[["unscheduled","Backlog"]].concat(wc.days.map((iso,i)=>[iso,DAYNAMES[i]+" "+fmtDate(new Date(iso))]));
   const modal=document.getElementById("modal");
   modal.innerHTML=
@@ -278,6 +297,7 @@ function openModal(card,defaultDay){
     '</div>'+
     '<div class="field"><label>Deadline</label><input id="m_deadline" type="date" value="'+(c.deadline||"")+'"></div>'+
     '<div class="field"><label>Blocked by (dependency)</label><input id="m_blocked" value="'+esc(c.blockedBy||"")+'" placeholder="e.g. waiting on someone"></div>'+
+    '<div class="field"><label>Subtasks <span style="color:var(--faint);font-weight:400">(one per line, tick them on the card)</span></label><textarea id="m_subs" rows="3" placeholder="What needs doing, step by step">'+esc((c.subs||[]).map(s=>s.t).join("\n"))+'</textarea></div>'+
     '<div class="modalfoot">'+
       (editing?'<button class="danger" id="m_del">Delete</button>':'')+
       '<span class="spacer"></span>'+
@@ -297,13 +317,16 @@ function openModal(card,defaultDay){
     const priority=document.getElementById("m_prio").value;
     const deadline=document.getElementById("m_deadline").value;
     const blockedBy=document.getElementById("m_blocked").value.trim();
+    const subLines=document.getElementById("m_subs").value.split("\n").map(s=>s.trim()).filter(Boolean);
+    const oldSubs=(c.subs||[]);
+    const subs=subLines.map(t=>{ const ex=oldSubs.find(s=>s.t===t); return {t,done:ex?ex.done:false}; });
     if(editing){
       c.title=titleRaw.trim()||"Untitled";
-      c.client=client; c.day=day; c.hours=hours; c.priority=priority; c.deadline=deadline; c.blockedBy=blockedBy;
+      c.client=client; c.day=day; c.hours=hours; c.priority=priority; c.deadline=deadline; c.blockedBy=blockedBy; c.subs=subs;
     } else {
       const lines=titleRaw.split("\n").map(s=>s.trim()).filter(Boolean);
       if(lines.length===0) lines.push("Untitled");
-      lines.forEach(t=>{ state.cards.push({id:uid(),client,day,hours,priority,deadline,blockedBy,done:false,title:t}); });
+      lines.forEach(t=>{ state.cards.push({id:uid(),client,day,hours,priority,deadline,blockedBy,done:false,title:t,subs:subs.map(s=>({t:s.t,done:false}))}); });
     }
     showOverlay(false); persist();
   };
