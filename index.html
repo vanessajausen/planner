@@ -54,6 +54,8 @@
   .card .cb:checked::after{content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
   .card .meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px;font-size:11px;color:var(--muted)}
   .card .clientname{font-weight:600}
+  .card .chead{font-size:13px;font-weight:600;word-break:break-word}
+  .cardempty{font-size:11px;color:var(--faint);margin-top:7px}
   .subs{margin-top:7px;display:flex;flex-direction:column;gap:4px}
   .subrow{display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;color:var(--ink)}
   .subrow .scb{width:13px;height:13px;border:1.5px solid var(--line2);border-radius:3px;flex:none;position:relative;display:inline-block}
@@ -148,6 +150,11 @@ async function loadState(){
   if(!state) state=seed();
   if(!state.clients) state.clients=seed().clients;
   if(!state.cards) state.cards=[];
+  state.cards.forEach(c=>{
+    if(!Array.isArray(c.subs)) c.subs=[];
+    if(c.subs.length===0 && c.title){ c.subs=[{t:c.title,done:!!c.done}]; }
+    delete c.title; delete c.done;
+  });
   const EMO={};
   state.clients.forEach(c=>{ if(!c.emoji && EMO[c.name]) c.emoji=EMO[c.name]; });
 }
@@ -176,10 +183,10 @@ function rollover(){
   let changed=false;
   state.cards.forEach(c=>{
     if(c.day==="unscheduled") return;
-    if(!c.done && c.day<today){ c.day=today; changed=true; }
+    if(!cardDone(c) && c.day<today){ c.day=today; changed=true; }
   });
   const before=state.cards.length;
-  state.cards=state.cards.filter(c=> !(c.done && c.day!=="unscheduled" && c.day<ws));
+  state.cards=state.cards.filter(c=> !(cardDone(c) && c.day!=="unscheduled" && c.day<ws));
   if(state.cards.length!==before) changed=true;
   return changed;
 }
@@ -238,18 +245,15 @@ function buildColumn(dayKey,label,dateISO,wc){
   return col;
 }
 function buildCard(c){
-  const el=document.createElement("div"); el.className="card"+(c.done?" done":""); el.style.setProperty("--cl",clientColor(c.client));
+  const done=cardDone(c);
+  const el=document.createElement("div"); el.className="card"+(done?" done":""); el.style.setProperty("--cl",clientColor(c.client));
   el.style.minHeight=Math.max(42,Math.round((Number(c.hours)||0.5)*60))+"px";
   el.draggable=true;
   el.addEventListener("dragstart",e=>e.dataTransfer.setData("text/plain",c.id));
-  const top=document.createElement("div"); top.className="top";
-  const cb=document.createElement("input"); cb.type="checkbox"; cb.className="cb"; cb.checked=c.done;
-  cb.onclick=e=>{e.stopPropagation();c.done=cb.checked;persist();};
-  const title=document.createElement("div"); title.className="title"; title.textContent=c.title;
-  top.appendChild(cb); top.appendChild(title);
-  el.appendChild(top);
+  const chead=document.createElement("div"); chead.className="chead"; chead.style.color=clientColor(c.client);
+  chead.textContent=(clientEmoji(c.client)?clientEmoji(c.client)+" ":"")+c.client;
+  el.appendChild(chead);
   const meta=document.createElement("div"); meta.className="meta";
-  const cn=document.createElement("span"); cn.className="clientname"; cn.style.color=clientColor(c.client); cn.textContent=(clientEmoji(c.client)?clientEmoji(c.client)+" ":"")+c.client; meta.appendChild(cn);
   if(c.hours){ const h=document.createElement("span"); h.className="chip"; h.textContent=fmtH(c.hours); meta.appendChild(h); }
   const pr=PRIOS.find(p=>p[0]===c.priority);
   if(pr){ const p=document.createElement("span"); p.className="prio"; p.innerHTML='<span class="pdot" style="background:'+pr[2]+'"></span>'+pr[1]; meta.appendChild(p); }
@@ -268,12 +272,17 @@ function buildCard(c){
       sb.appendChild(r);
     });
     el.appendChild(sb);
+  } else {
+    const em=document.createElement("div"); em.className="cardempty"; em.textContent="No to-dos - click to add";
+    el.appendChild(em);
   }
-  el.addEventListener("click",e=>{ if(e.target===cb) return; openModal(c,c.day); });
+  el.addEventListener("click",()=>openModal(c,c.day));
   return el;
 }
+function cardDone(c){ return !!(c.subs && c.subs.length && c.subs.every(s=>s.done)); }
 function sortCards(a,b){
-  if(a.done!==b.done) return a.done?1:-1;
+  const ad=cardDone(a), bd=cardDone(b);
+  if(ad!==bd) return ad?1:-1;
   if(PRANK[a.priority]!==PRANK[b.priority]) return PRANK[a.priority]-PRANK[b.priority];
   if(a.deadline&&b.deadline&&a.deadline!==b.deadline) return a.deadline<b.deadline?-1:1;
   if(a.deadline&&!b.deadline) return -1;
@@ -296,8 +305,7 @@ function openModal(card,defaultDay){
   const dayOpts=[["unscheduled","Backlog"]].concat(wc.days.map((iso,i)=>[iso,DAYNAMES[i]+" "+fmtDate(new Date(iso))]));
   const modal=document.getElementById("modal");
   modal.innerHTML=
-    '<h2>'+(editing?"Edit task":"New task")+'</h2>'+
-    '<div class="field"><label>Task</label><input id="m_title" value="'+esc(c.title)+'" placeholder="e.g. Von Heesen bug fixes"></div>'+
+    '<h2>'+(editing?"Edit card":"New card")+'</h2>'+
     '<div class="grid2">'+
       '<div class="field"><label>Client</label><select id="m_client">'+state.clients.map(cl=>'<option value="'+esc(cl.name)+'" '+(cl.name===c.client?"selected":"")+'>'+(cl.emoji?cl.emoji+" ":"")+esc(cl.name)+'</option>').join("")+'</select></div>'+
       '<div class="field"><label>Day</label><select id="m_day">'+dayOpts.map(o=>'<option value="'+o[0]+'" '+(o[0]===c.day?"selected":"")+'>'+o[1]+'</option>').join("")+'</select></div>'+
@@ -308,7 +316,7 @@ function openModal(card,defaultDay){
     '</div>'+
     '<div class="field"><label>Deadline</label><input id="m_deadline" type="date" value="'+(c.deadline||"")+'"></div>'+
     '<div class="field"><label>Blocked by (dependency)</label><input id="m_blocked" value="'+esc(c.blockedBy||"")+'" placeholder="e.g. waiting on someone"></div>'+
-    '<div class="field"><label>Subtasks</label><div id="m_sublist" class="sublist"></div><button type="button" id="m_addsub" class="subadd">+ Add subtask</button></div>'+
+    '<div class="field"><label>To-dos</label><div id="m_sublist" class="sublist"></div><button type="button" id="m_addsub" class="subadd">+ Add to-do</button></div>'+
     '<div class="modalfoot">'+
       (editing?'<button class="danger" id="m_del">Delete</button>':'')+
       '<span class="spacer"></span>'+
@@ -316,8 +324,8 @@ function openModal(card,defaultDay){
       '<button class="primary" id="m_save">'+(editing?"Save":"Add")+'</button>'+
     '</div>';
   showOverlay(true);
-  document.getElementById("m_title").focus();
   let subsDraft=(c.subs||[]).map(s=>({t:s.t,done:!!s.done}));
+  if(!editing && subsDraft.length===0) subsDraft.push({t:"",done:false});
   const subListEl=document.getElementById("m_sublist");
   function drawSubs(focusIdx){
     subListEl.innerHTML="";
@@ -335,13 +343,12 @@ function openModal(card,defaultDay){
     });
     if(focusIdx!=null){ const inputs=subListEl.querySelectorAll("input"); if(inputs[focusIdx]) inputs[focusIdx].focus(); }
   }
-  drawSubs();
+  drawSubs(0);
   document.getElementById("m_addsub").onclick=()=>{ subsDraft.push({t:"",done:false}); drawSubs(subsDraft.length-1); };
   const _dayEl=document.getElementById("m_day"), _dlEl=document.getElementById("m_deadline");
   _dayEl.addEventListener("change",()=>{ if(_dayEl.value!=="unscheduled") _dlEl.value=_dayEl.value; });
   document.getElementById("m_cancel").onclick=()=>showOverlay(false);
   document.getElementById("m_save").onclick=()=>{
-    const title=document.getElementById("m_title").value.trim()||"Untitled";
     const client=document.getElementById("m_client").value;
     const day=document.getElementById("m_day").value;
     const hours=parseFloat(document.getElementById("m_hours").value)||0;
@@ -350,9 +357,10 @@ function openModal(card,defaultDay){
     const blockedBy=document.getElementById("m_blocked").value.trim();
     const subs=subsDraft.map(s=>({t:s.t.trim(),done:s.done})).filter(s=>s.t);
     if(editing){
-      c.title=title; c.client=client; c.day=day; c.hours=hours; c.priority=priority; c.deadline=deadline; c.blockedBy=blockedBy; c.subs=subs;
+      c.client=client; c.day=day; c.hours=hours; c.priority=priority; c.deadline=deadline; c.blockedBy=blockedBy; c.subs=subs;
     } else {
-      state.cards.push({id:uid(),client,day,hours,priority,deadline,blockedBy,done:false,title,subs});
+      if(subs.length===0){ showOverlay(false); return; }
+      state.cards.push({id:uid(),client,day,hours,priority,deadline,blockedBy,subs});
     }
     showOverlay(false); persist();
   };
