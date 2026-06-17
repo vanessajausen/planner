@@ -121,7 +121,11 @@
   .week{cursor:pointer}
   .search{font:inherit;padding:6px 10px;border:0.5px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink);width:150px;flex:none}
   .search:focus{outline:none;border-color:var(--ink)}
-  .chip.overdue{background:rgba(192,57,43,.12);color:var(--urgent);font-weight:600;cursor:default;padding:4px 8px;border-radius:6px;font-size:11px}
+  .chip.overdue{background:rgba(192,57,43,.12);color:var(--urgent);font-weight:600;cursor:pointer;padding:4px 8px;border-radius:6px;font-size:11px}
+  .chip.overdue.on{outline:1.5px solid var(--urgent);outline-offset:1px}
+  .draghandle{cursor:grab;color:var(--faint);font-size:13px;padding:0 2px;flex:none;user-select:none}
+  .draghandle:active{cursor:grabbing}
+  .clientrow.dragover{outline:1.5px dashed var(--line2);outline-offset:2px;border-radius:6px}
   .chip.carry{background:rgba(217,130,43,.14);color:var(--high);font-weight:600}
   .linkchip{background:var(--bg);color:#3A6EA5;text-decoration:none}
   .linkchip:hover{text-decoration:underline}
@@ -173,6 +177,7 @@ let state=null, storageMode="memory";
 let expandedDone={};
 let weekOffset=0;
 let filterText="";
+let overdueOnly=false;
 
 function startMidnight(d){const x=new Date(d);x.setHours(0,0,0,0);return x;}
 function getMonday(d){const x=startMidnight(d);const off=(x.getDay()+6)%7;x.setDate(x.getDate()-off);return x;}
@@ -195,6 +200,9 @@ function rollTargetISO(){ const now=new Date(); if(isWeekend()) return iso(addDa
 function workToday(){ return rollTargetISO(); }
 function activeWeek(){ return weekContext(defaultOffset()); }
 function monthlyDate(y,m,dom){ const last=new Date(y,m+1,0).getDate(); let d=new Date(y,m,Math.min(dom,last)); if(d.getDay()===6) d=addDays(d,-1); else if(d.getDay()===0) d=addDays(d,1); return d; }
+function firstWeekdayOfMonth(y,m){ let d=new Date(y,m,1); while(d.getDay()===0||d.getDay()===6) d=addDays(d,1); return d; }
+function isOverdue(c){ return !cardDone(c) && !!c.deadline && c.deadline<iso(startMidnight(new Date())); }
+function repeatLabel(rep){ return rep==="monthlyfw"?"monthly (1st wd)":rep; }
 function isBucket(d){ return d==="unscheduled"||d==="someday"; }
 function matchesFilter(c){ if(!filterText) return true; const q=filterText.toLowerCase(); return (c.client||"").toLowerCase().includes(q) || (c.notes||"").toLowerCase().includes(q) || (c.subs||[]).some(s=>(s.t||"").toLowerCase().includes(q)); }
 function overdueCount(){ const t=iso(startMidnight(new Date())); return state.cards.filter(c=>!cardDone(c) && c.deadline && c.deadline<t).length; }
@@ -277,6 +285,9 @@ function ensureRecurring(){
       const dom=(typeof c.repeatDom==="number")?c.repeatDom:1;
       if(c.lastMonth!==ym){ c.subs.forEach(s=>s.done=false); c.lastMonth=ym; }
       c.day=iso(monthlyDate(today.getFullYear(),today.getMonth(),dom));
+    } else if(c.repeat==="monthlyfw"){
+      if(c.lastMonth!==ym){ c.subs.forEach(s=>s.done=false); c.lastMonth=ym; }
+      c.day=iso(firstWeekdayOfMonth(today.getFullYear(),today.getMonth()));
     }
   });
 }
@@ -290,7 +301,7 @@ function render(){
   if(pv) pv.style.visibility=(state.view==="today")?"hidden":"visible";
   if(nx) nx.style.visibility=(state.view==="today")?"hidden":"visible";
   const oc=overdueCount(); const ochip=document.getElementById("overdueChip");
-  if(ochip){ ochip.style.display=oc>0?"inline-flex":"none"; ochip.textContent="⚠ "+oc+" overdue"; }
+  if(ochip){ ochip.style.display=(oc>0||overdueOnly)?"inline-flex":"none"; ochip.className="chip overdue"+(overdueOnly?" on":""); ochip.textContent="⚠ "+oc+" overdue"; }
   const board=document.getElementById("board");
   board.innerHTML="";
   board.appendChild(buildColumn("unscheduled","Backlog","",vw));
@@ -310,7 +321,7 @@ function buildColumn(dayKey,label,dateISO,wc,focus){
     if(dayKey===realToday) col.className+=" today";
     else if(dayKey<realToday) col.className+=" past";
   }
-  const all=state.cards.filter(c=>c.day===dayKey && matchesFilter(c)).sort(sortCards);
+  const all=state.cards.filter(c=>c.day===dayKey && matchesFilter(c) && (!overdueOnly || isOverdue(c))).sort(sortCards);
   const active=all.filter(c=>!cardDone(c));
   const doneCards=all.filter(c=>cardDone(c));
   const totalH=all.reduce((s,c)=>s+(Number(c.hours)||0),0);
@@ -385,7 +396,7 @@ function buildCard(c){
   const pr=PRIOS.find(p=>p[0]===c.priority);
   if(pr){ const p=document.createElement("span"); p.className="prio"; p.innerHTML='<span class="pdot" style="background:'+pr[2]+'"></span>'+pr[1]; meta.appendChild(p); }
   if(c.deadline){ const dl=document.createElement("span"); dl.className="deadline "+deadlineClass(c.deadline); dl.textContent="due "+fmtDate(new Date(c.deadline)); meta.appendChild(dl); }
-  if(c.repeat && c.repeat!=="none"){ const rc=document.createElement("span"); rc.className="chip recur"; rc.textContent="↻ "+c.repeat; meta.appendChild(rc); }
+  if(c.repeat && c.repeat!=="none"){ const rc=document.createElement("span"); rc.className="chip recur"; rc.textContent="↻ "+repeatLabel(c.repeat); meta.appendChild(rc); }
   if(c.blockedBy){ const b=document.createElement("span"); b.className="blocked"; b.textContent="⛓ "+c.blockedBy; meta.appendChild(b); }
   if(c.subs && c.subs.length){ const dn=c.subs.filter(s=>s.done).length; const sc=document.createElement("span"); sc.className="chip"; sc.textContent="☑ "+dn+"/"+c.subs.length; meta.appendChild(sc); }
   if(c.link){ const lk=document.createElement("a"); lk.className="chip linkchip"; lk.href=c.link; lk.target="_blank"; lk.rel="noopener"; lk.textContent="🔗 link"; lk.onclick=e=>{ e.stopPropagation(); }; meta.appendChild(lk); }
@@ -494,7 +505,7 @@ function openModal(card,defaultDay){
       '<div class="field"><label>Priority</label><select id="m_prio">'+PRIOS.map(p=>'<option value="'+p[0]+'" '+(p[0]===c.priority?"selected":"")+'>'+p[1]+'</option>').join("")+'</select></div>'+
     '</div>'+
     '<div class="field"><label>Deadline</label><input id="m_deadline" type="date" value="'+(c.deadline||"")+'"></div>'+
-    '<div class="field"><label>Repeat</label><select id="m_repeat"><option value="none" '+(!c.repeat||c.repeat==="none"?"selected":"")+'>No repeat</option><option value="daily" '+(c.repeat==="daily"?"selected":"")+'>Daily (weekdays)</option><option value="weekly" '+(c.repeat==="weekly"?"selected":"")+'>Weekly (same weekday)</option><option value="monthly" '+(c.repeat==="monthly"?"selected":"")+'>Monthly (same date)</option></select></div>'+
+    '<div class="field"><label>Repeat</label><select id="m_repeat"><option value="none" '+(!c.repeat||c.repeat==="none"?"selected":"")+'>No repeat</option><option value="daily" '+(c.repeat==="daily"?"selected":"")+'>Daily (weekdays)</option><option value="weekly" '+(c.repeat==="weekly"?"selected":"")+'>Weekly (same weekday)</option><option value="monthly" '+(c.repeat==="monthly"?"selected":"")+'>Monthly (same date)</option><option value="monthlyfw" '+(c.repeat==="monthlyfw"?"selected":"")+'>Monthly (first weekday)</option></select></div>'+
     '<div class="field"><label>Blocked by (dependency)</label><input id="m_blocked" value="'+esc(c.blockedBy||"")+'" placeholder="e.g. waiting on someone"></div>'+
     '<div class="field"><label>Link (Slack / ClickUp / Figma)</label><input id="m_link" value="'+esc(c.link||"")+'" placeholder="https://..."></div>'+
     '<div class="field"><label>Notes</label><textarea id="m_notes" placeholder="Context, decisions, anything">'+esc(c.notes||"")+'</textarea></div>'+
@@ -555,6 +566,7 @@ function openModal(card,defaultDay){
     if(repeatSel==="daily") rep="daily";
     else if(repeatSel==="weekly" && day!=="unscheduled") rep="weekly";
     else if(repeatSel==="monthly" && day!=="unscheduled") rep="monthly";
+    else if(repeatSel==="monthlyfw") rep="monthlyfw";
     const repeatDow=rep==="weekly"?(new Date(day).getDay()+6)%7:null;
     const repeatDom=rep==="monthly"?new Date(day).getDate():null;
     const _t=new Date(workToday()); const _ym=_t.getFullYear()+"-"+String(_t.getMonth()+1).padStart(2,"0");
@@ -563,13 +575,13 @@ function openModal(card,defaultDay){
       c.repeatDow=repeatDow; c.repeatDom=repeatDom;
       if(rep==="weekly") c.lastWeek=activeWeek().weekStartISO;
       if(rep==="daily") c.lastDay=workToday();
-      if(rep==="monthly") c.lastMonth=_ym;
+      if(rep==="monthly"||rep==="monthlyfw") c.lastMonth=_ym;
     } else {
-      if(subs.length===0){ showOverlay(false); return; }
       const nc={id:uid(),client,day,hours,priority,deadline,blockedBy,link,notes,subs,repeat:rep};
       if(rep==="weekly"){ nc.repeatDow=repeatDow; nc.lastWeek=activeWeek().weekStartISO; }
       if(rep==="daily"){ nc.lastDay=workToday(); }
       if(rep==="monthly"){ nc.repeatDom=repeatDom; nc.lastMonth=_ym; }
+      if(rep==="monthlyfw"){ nc.lastMonth=_ym; }
       state.cards.push(nc);
     }
     showOverlay(false); persist();
@@ -592,6 +604,12 @@ function openClients(){
       emo.onchange=()=>{cl.emoji=emo.value.trim();persist();};
       txt.onchange=()=>{const old=cl.name;cl.name=txt.value.trim()||old;state.cards.forEach(c=>{if(c.client===old)c.client=cl.name});persist();};
       del.onclick=()=>{state.clients.splice(idx,1);draw();persist();};
+      const handle=document.createElement("span"); handle.className="draghandle"; handle.textContent="⠿"; handle.title="Drag to reorder"; handle.draggable=true;
+      handle.addEventListener("dragstart",e=>{ e.dataTransfer.setData("text/plain",String(idx)); e.dataTransfer.effectAllowed="move"; });
+      row.insertBefore(handle,row.firstChild);
+      row.addEventListener("dragover",e=>{ e.preventDefault(); row.classList.add("dragover"); });
+      row.addEventListener("dragleave",()=>row.classList.remove("dragover"));
+      row.addEventListener("drop",e=>{ e.preventDefault(); row.classList.remove("dragover"); const from=parseInt(e.dataTransfer.getData("text/plain"),10); if(isNaN(from)||from===idx) return; const moved=state.clients.splice(from,1)[0]; state.clients.splice(idx,0,moved); draw(); persist(); });
       list.appendChild(row);
     });
   }
@@ -674,6 +692,7 @@ document.getElementById("backupBtn").onclick=exportData;
 document.getElementById("importBtn").onclick=()=>document.getElementById("importFile").click();
 document.getElementById("importFile").onchange=e=>{ const f=e.target.files[0]; if(f) importData(f); e.target.value=""; };
 document.getElementById("searchInput").oninput=e=>{ filterText=e.target.value.trim(); render(); };
+document.getElementById("overdueChip").onclick=()=>{ overdueOnly=!overdueOnly; render(); };
 document.getElementById("overlay").addEventListener("click",e=>{ if(e.target.id==="overlay") showOverlay(false); });
 document.addEventListener("click",e=>{ if(!e.target.closest(".snoozemenu") && !(e.target.classList&&e.target.classList.contains("snoozebtn"))) document.querySelectorAll(".snoozemenu").forEach(m=>m.remove()); });
 
