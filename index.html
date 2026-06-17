@@ -119,6 +119,16 @@
   .navbtn{border:none;background:none;color:var(--muted);font-size:17px;line-height:1;padding:2px 7px;cursor:pointer;border-radius:6px}
   .navbtn:hover{background:var(--bg);color:var(--ink)}
   .week{cursor:pointer}
+  .search{font:inherit;padding:6px 10px;border:0.5px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink);width:150px;flex:none}
+  .search:focus{outline:none;border-color:var(--ink)}
+  .chip.overdue{background:rgba(192,57,43,.12);color:var(--urgent);font-weight:600;cursor:default;padding:4px 8px;border-radius:6px;font-size:11px}
+  .chip.carry{background:rgba(217,130,43,.14);color:var(--high);font-weight:600}
+  .linkchip{background:var(--bg);color:#3A6EA5;text-decoration:none}
+  .linkchip:hover{text-decoration:underline}
+  .planrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 4px;border-bottom:0.5px solid var(--line)}
+  .planlab{font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .planbtns{display:flex;gap:4px;flex:none}
+  .planbtns button{padding:4px 8px;font-size:11px}
 </style>
 
 <header>
@@ -127,11 +137,17 @@
   <span class="week" id="weeklabel" title="Jump to current week"></span>
   <button id="nextWk" class="navbtn" title="Next week">›</button>
   <span class="spacer"></span>
+  <input id="searchInput" class="search" type="text" placeholder="Search...">
+  <span class="chip overdue" id="overdueChip" style="display:none"></span>
   <span class="save" id="savestate"></span>
   <button class="primary" id="addBtn">+ Task</button>
+  <button id="planBtn">Plan</button>
   <button id="focusBtn" class="focusbtn">Focus today</button>
   <button id="clientsBtn">Clients</button>
+  <button class="ghost" id="backupBtn" title="Download a backup file">Backup</button>
+  <button class="ghost" id="importBtn" title="Restore from a backup file">Import</button>
   <button class="ghost" id="resetBtn" title="Clear tasks">Reset</button>
+  <input type="file" id="importFile" accept="application/json" style="display:none">
 </header>
 
 <div class="board" id="board"></div>
@@ -150,6 +166,7 @@ const DAILY_TARGET=7;
 let state=null, storageMode="memory";
 let expandedDone={};
 let weekOffset=0;
+let filterText="";
 
 function startMidnight(d){const x=new Date(d);x.setHours(0,0,0,0);return x;}
 function getMonday(d){const x=startMidnight(d);const off=(x.getDay()+6)%7;x.setDate(x.getDate()-off);return x;}
@@ -172,6 +189,9 @@ function rollTargetISO(){ const now=new Date(); if(isWeekend()) return iso(addDa
 function workToday(){ return rollTargetISO(); }
 function activeWeek(){ return weekContext(defaultOffset()); }
 function monthlyDate(y,m,dom){ const last=new Date(y,m+1,0).getDate(); let d=new Date(y,m,Math.min(dom,last)); if(d.getDay()===6) d=addDays(d,-1); else if(d.getDay()===0) d=addDays(d,1); return d; }
+function isBucket(d){ return d==="unscheduled"||d==="someday"; }
+function matchesFilter(c){ if(!filterText) return true; const q=filterText.toLowerCase(); return (c.client||"").toLowerCase().includes(q) || (c.notes||"").toLowerCase().includes(q) || (c.subs||[]).some(s=>(s.t||"").toLowerCase().includes(q)); }
+function overdueCount(){ const t=iso(startMidnight(new Date())); return state.cards.filter(c=>!cardDone(c) && c.deadline && c.deadline<t).length; }
 
 async function loadState(){
   let raw=null;
@@ -190,7 +210,11 @@ async function loadState(){
     if(c.subs.length===0 && c.title){ c.subs=[{t:c.title,done:!!c.done}]; }
     delete c.title; delete c.done;
     if(!c.repeat) c.repeat="none";
+    if(c.link===undefined) c.link="";
+    if(c.notes===undefined) c.notes="";
+    if(typeof c.rollCount!=="number") c.rollCount=0;
   });
+  if(!state.clients.some(c=>c.name==="Koordination")){ state.clients.push({name:"Koordination",color:"#7A6FF0",emoji:"🧭"}); }
   if(state.view!=="today") state.view="week";
   const EMO={};
   state.clients.forEach(c=>{ if(!c.emoji && EMO[c.name]) c.emoji=EMO[c.name]; });
@@ -220,11 +244,11 @@ function rollover(){
   let changed=false;
   state.cards.forEach(c=>{
     if(c.repeat!=="none") return;
-    if(c.day==="unscheduled") return;
-    if(!cardDone(c) && c.day<today){ c.day=today; changed=true; }
+    if(isBucket(c.day)) return;
+    if(!cardDone(c) && c.day<today){ c.day=today; c.rollCount=(c.rollCount||0)+1; changed=true; }
   });
   const before=state.cards.length;
-  state.cards=state.cards.filter(c=> !(c.repeat==="none" && cardDone(c) && c.day!=="unscheduled" && c.day<ws));
+  state.cards=state.cards.filter(c=> !(c.repeat==="none" && cardDone(c) && !isBucket(c.day) && c.day<ws));
   if(state.cards.length!==before) changed=true;
   return changed;
 }
@@ -257,6 +281,8 @@ function render(){
   const pv=document.getElementById("prevWk"), nx=document.getElementById("nextWk");
   if(pv) pv.style.visibility=(state.view==="today")?"hidden":"visible";
   if(nx) nx.style.visibility=(state.view==="today")?"hidden":"visible";
+  const oc=overdueCount(); const ochip=document.getElementById("overdueChip");
+  if(ochip){ ochip.style.display=oc>0?"inline-flex":"none"; ochip.textContent="⚠ "+oc+" overdue"; }
   const board=document.getElementById("board");
   board.innerHTML="";
   board.appendChild(buildColumn("unscheduled","Backlog","",vw));
@@ -265,17 +291,18 @@ function render(){
     board.appendChild(buildColumn(t,DAYNAMES[di],t,vw,true));
   } else {
     vw.days.forEach((d,i)=>{ board.appendChild(buildColumn(d,DAYNAMES[i],d,vw)); });
+    board.appendChild(buildColumn("someday","Someday","",vw));
   }
 }
 function buildColumn(dayKey,label,dateISO,wc,focus){
   const col=document.createElement("div");
-  col.className="col"+(dayKey==="unscheduled"?" unscheduled":"")+(focus?" focus":"");
+  col.className="col"+(isBucket(dayKey)?" unscheduled":"")+(focus?" focus":"");
   const realToday=iso(startMidnight(new Date()));
-  if(dayKey!=="unscheduled"){
+  if(!isBucket(dayKey)){
     if(dayKey===realToday) col.className+=" today";
     else if(dayKey<realToday) col.className+=" past";
   }
-  const all=state.cards.filter(c=>c.day===dayKey).sort(sortCards);
+  const all=state.cards.filter(c=>c.day===dayKey && matchesFilter(c)).sort(sortCards);
   const active=all.filter(c=>!cardDone(c));
   const doneCards=all.filter(c=>cardDone(c));
   const totalH=all.reduce((s,c)=>s+(Number(c.hours)||0),0);
@@ -285,10 +312,10 @@ function buildColumn(dayKey,label,dateISO,wc,focus){
   const left=document.createElement("div");
   left.innerHTML='<span class="day">'+label+'</span>'+(dateISO?' <span class="date">'+fmtDate(new Date(dateISO))+'</span>':'')+(dayKey===realToday?'<span class="todaytag">today</span>':'');
   row1.appendChild(left);
-  if(dayKey!=="unscheduled"){ const h=document.createElement("span"); h.className="hrs"; h.textContent=fmtH(totalH); row1.appendChild(h); }
+  if(!isBucket(dayKey)){ const h=document.createElement("span"); h.className="hrs"; h.textContent=fmtH(totalH); row1.appendChild(h); }
   head.appendChild(row1);
 
-  if(dayKey!=="unscheduled"){
+  if(!isBucket(dayKey)){
     const cov=document.createElement("div"); cov.className="coverage";
     const covered=new Set(all.map(c=>c.client));
     state.clients.forEach(cl=>{
@@ -310,7 +337,7 @@ function buildColumn(dayKey,label,dateISO,wc,focus){
   wrap.addEventListener("dragover",e=>{e.preventDefault();wrap.classList.add("dragover");});
   wrap.addEventListener("dragleave",()=>wrap.classList.remove("dragover"));
   wrap.addEventListener("drop",e=>{e.preventDefault();wrap.classList.remove("dragover");const id=e.dataTransfer.getData("text/plain");reorder(id,dayKey,null);});
-  if(all.length===0){ const em=document.createElement("div"); em.className="empty"; em.textContent=dayKey==="unscheduled"?"Backlog is empty":"Free"; wrap.appendChild(em); }
+  if(all.length===0){ const em=document.createElement("div"); em.className="empty"; em.textContent=dayKey==="unscheduled"?"Backlog is empty":(dayKey==="someday"?"Nothing parked":"Free"); wrap.appendChild(em); }
   active.forEach(c=>wrap.appendChild(buildCard(c)));
   if(doneCards.length){
     const dg=document.createElement("div"); dg.className="donegroup";
@@ -353,6 +380,9 @@ function buildCard(c){
   if(c.repeat && c.repeat!=="none"){ const rc=document.createElement("span"); rc.className="chip recur"; rc.textContent="↻ "+c.repeat; meta.appendChild(rc); }
   if(c.blockedBy){ const b=document.createElement("span"); b.className="blocked"; b.textContent="⛓ "+c.blockedBy; meta.appendChild(b); }
   if(c.subs && c.subs.length){ const dn=c.subs.filter(s=>s.done).length; const sc=document.createElement("span"); sc.className="chip"; sc.textContent="☑ "+dn+"/"+c.subs.length; meta.appendChild(sc); }
+  if(c.link){ const lk=document.createElement("a"); lk.className="chip linkchip"; lk.href=c.link; lk.target="_blank"; lk.rel="noopener"; lk.textContent="🔗 link"; lk.onclick=e=>{ e.stopPropagation(); }; meta.appendChild(lk); }
+  if(c.notes){ const nt=document.createElement("span"); nt.className="chip"; nt.textContent="📝"; nt.title=c.notes; meta.appendChild(nt); }
+  if((c.rollCount||0)>=3){ const co=document.createElement("span"); co.className="chip carry"; co.textContent="↪ "+c.rollCount+"×"; co.title="Carried over "+c.rollCount+" times - do it or drop it"; meta.appendChild(co); }
   el.appendChild(meta);
   if(c.subs && c.subs.length){
     const sb=document.createElement("div"); sb.className="subs";
@@ -377,7 +407,7 @@ function toggleSnooze(el,c){
   document.querySelectorAll(".snoozemenu").forEach(m=>m.remove());
   if(open) return;
   const m=document.createElement("div"); m.className="snoozemenu";
-  [["Tomorrow","tomorrow"],["Next week","nextweek"],["Backlog","backlog"]].forEach(o=>{
+  [["Tomorrow","tomorrow"],["Next week","nextweek"],["Someday","someday"],["Backlog","backlog"]].forEach(o=>{
     const b=document.createElement("button"); b.textContent=o[0];
     b.onclick=e=>{ e.stopPropagation(); snooze(c,o[1]); };
     m.appendChild(b);
@@ -386,6 +416,7 @@ function toggleSnooze(el,c){
 }
 function snooze(c,kind){
   if(kind==="backlog"){ c.day="unscheduled"; if(c.repeat&&c.repeat!=="none") c.repeat="none"; }
+  else if(kind==="someday"){ c.day="someday"; if(c.repeat&&c.repeat!=="none") c.repeat="none"; }
   else {
     let base=(c.day && c.day!=="unscheduled")?new Date(c.day):new Date(workToday());
     if(kind==="tomorrow"){ base=addDays(base,1); while(base.getDay()===0||base.getDay()===6) base=addDays(base,1); }
@@ -402,7 +433,7 @@ function reorder(draggedId,day,beforeId){
   if(!dragged) return;
   dragged.day=day;
   if(dragged.repeat && dragged.repeat!=="none"){
-    if(day==="unscheduled") dragged.repeat="none";
+    if(isBucket(day)) dragged.repeat="none";
     else if(dragged.repeat==="weekly"){ dragged.repeatDow=(new Date(day).getDay()+6)%7; }
     else if(dragged.repeat==="monthly"){ dragged.repeatDom=new Date(day).getDate(); }
   }
@@ -439,8 +470,8 @@ function openModal(card,defaultDay){
   const editing=!!card;
   const dfDay=defaultDay||"unscheduled";
   const dfDeadline=(dfDay && dfDay!=="unscheduled")?dfDay:(wc.targetISO||workToday());
-  const c=card||{id:uid(),client:state.clients[0]?.name||"",title:"",hours:1,priority:"normal",deadline:dfDeadline,blockedBy:"",done:false,day:dfDay,subs:[]};
-  let dayOpts=[["unscheduled","Backlog"]].concat(wc.days.map((d,i)=>[d,DAYNAMES[i]+" "+fmtDate(new Date(d))]));
+  const c=card||{id:uid(),client:state.clients[0]?.name||"",title:"",hours:1,priority:"normal",deadline:dfDeadline,blockedBy:"",link:"",notes:"",done:false,day:dfDay,subs:[]};
+  let dayOpts=[["unscheduled","Backlog"],["someday","Someday"]].concat(wc.days.map((d,i)=>[d,DAYNAMES[i]+" "+fmtDate(new Date(d))]));
   if(editing && c.day && c.day!=="unscheduled" && wc.days.indexOf(c.day)<0){ dayOpts.push([c.day,fmtDate(new Date(c.day))+" · KW"+isoWeek(c.day)]); }
   const modal=document.getElementById("modal");
   modal.innerHTML=
@@ -456,6 +487,8 @@ function openModal(card,defaultDay){
     '<div class="field"><label>Deadline</label><input id="m_deadline" type="date" value="'+(c.deadline||"")+'"></div>'+
     '<div class="field"><label>Repeat</label><select id="m_repeat"><option value="none" '+(!c.repeat||c.repeat==="none"?"selected":"")+'>No repeat</option><option value="daily" '+(c.repeat==="daily"?"selected":"")+'>Daily (weekdays)</option><option value="weekly" '+(c.repeat==="weekly"?"selected":"")+'>Weekly (same weekday)</option><option value="monthly" '+(c.repeat==="monthly"?"selected":"")+'>Monthly (same date)</option></select></div>'+
     '<div class="field"><label>Blocked by (dependency)</label><input id="m_blocked" value="'+esc(c.blockedBy||"")+'" placeholder="e.g. waiting on someone"></div>'+
+    '<div class="field"><label>Link (Slack / ClickUp / Figma)</label><input id="m_link" value="'+esc(c.link||"")+'" placeholder="https://..."></div>'+
+    '<div class="field"><label>Notes</label><textarea id="m_notes" placeholder="Context, decisions, anything">'+esc(c.notes||"")+'</textarea></div>'+
     '<div class="field"><label>To-dos</label><div id="m_sublist" class="sublist"></div><button type="button" id="m_addsub" class="subadd">+ Add to-do</button></div>'+
     '<div class="modalfoot">'+
       (editing?'<button class="danger" id="m_del">Delete</button>':'')+
@@ -495,6 +528,8 @@ function openModal(card,defaultDay){
     const priority=document.getElementById("m_prio").value;
     const deadline=document.getElementById("m_deadline").value;
     const blockedBy=document.getElementById("m_blocked").value.trim();
+    const link=document.getElementById("m_link").value.trim();
+    const notes=document.getElementById("m_notes").value.trim();
     const repeatSel=document.getElementById("m_repeat").value;
     const subs=subsDraft.map(s=>({t:s.t.trim(),done:s.done})).filter(s=>s.t);
     let rep="none";
@@ -505,14 +540,14 @@ function openModal(card,defaultDay){
     const repeatDom=rep==="monthly"?new Date(day).getDate():null;
     const _t=new Date(workToday()); const _ym=_t.getFullYear()+"-"+String(_t.getMonth()+1).padStart(2,"0");
     if(editing){
-      c.client=client; c.day=day; c.hours=hours; c.priority=priority; c.deadline=deadline; c.blockedBy=blockedBy; c.subs=subs; c.repeat=rep;
+      c.client=client; c.day=day; c.hours=hours; c.priority=priority; c.deadline=deadline; c.blockedBy=blockedBy; c.link=link; c.notes=notes; c.subs=subs; c.repeat=rep;
       c.repeatDow=repeatDow; c.repeatDom=repeatDom;
       if(rep==="weekly") c.lastWeek=activeWeek().weekStartISO;
       if(rep==="daily") c.lastDay=workToday();
       if(rep==="monthly") c.lastMonth=_ym;
     } else {
       if(subs.length===0){ showOverlay(false); return; }
-      const nc={id:uid(),client,day,hours,priority,deadline,blockedBy,subs,repeat:rep};
+      const nc={id:uid(),client,day,hours,priority,deadline,blockedBy,link,notes,subs,repeat:rep};
       if(rep==="weekly"){ nc.repeatDow=repeatDow; nc.lastWeek=activeWeek().weekStartISO; }
       if(rep==="daily"){ nc.lastDay=workToday(); }
       if(rep==="monthly"){ nc.repeatDom=repeatDom; nc.lastMonth=_ym; }
@@ -546,6 +581,64 @@ function openClients(){
   modal.querySelector("#m_addclient").onclick=()=>{state.clients.push({name:"New client",color:"#888888",emoji:""});draw();persist();};
   modal.querySelector("#m_close").onclick=()=>showOverlay(false);
 }
+function exportData(){
+  const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  const d=new Date(); const stamp=d.getFullYear()+String(d.getMonth()+1).padStart(2,"0")+String(d.getDate()).padStart(2,"0");
+  a.href=url; a.download="planner-backup-"+stamp+".json"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+function importData(file){
+  const r=new FileReader();
+  r.onload=()=>{
+    let obj=null;
+    try{ obj=JSON.parse(r.result); }catch(e){ alert("Couldn't read that file."); return; }
+    if(!obj||!Array.isArray(obj.clients)||!Array.isArray(obj.cards)){ alert("That doesn't look like a planner backup."); return; }
+    if(!confirm("Replace your current board with this backup? Your current data will be overwritten.")) return;
+    state=obj;
+    state.cards.forEach(c=>{ if(!Array.isArray(c.subs)) c.subs=[]; if(c.link===undefined)c.link=""; if(c.notes===undefined)c.notes=""; if(typeof c.rollCount!=="number")c.rollCount=0; if(!c.repeat)c.repeat="none"; });
+    if(!state.clients.some(c=>c.name==="Koordination")) state.clients.push({name:"Koordination",color:"#7A6FF0",emoji:"🧭"});
+    if(state.view!=="today") state.view="week";
+    ensureRecurring(); rollover(); persist();
+  };
+  r.readAsText(file);
+}
+function openPlan(){
+  const modal=document.getElementById("modal");
+  modal.innerHTML='<h2>Plan my day</h2>'+
+    '<div style="font-size:12px;color:var(--muted);margin:-6px 0 12px">Backlog items and anything past its deadline. Send each one to a day.</div>'+
+    '<div id="planlist"></div>'+
+    '<div class="modalfoot"><span class="spacer"></span><button class="primary" id="m_close">Done</button></div>';
+  const listEl=modal.querySelector("#planlist");
+  function planAssign(c,kind){
+    if(kind==="someday"){ c.day="someday"; if(c.repeat&&c.repeat!=="none")c.repeat="none"; return; }
+    let base=new Date(workToday());
+    if(kind==="tomorrow"){ base=addDays(base,1); while(base.getDay()===0||base.getDay()===6) base=addDays(base,1); }
+    c.day=iso(base);
+  }
+  function draw(){
+    const t=iso(startMidnight(new Date()));
+    const cur=state.cards.filter(c=>!cardDone(c) && (c.day==="unscheduled" || (c.deadline && c.deadline<t))).sort(sortCards);
+    listEl.innerHTML="";
+    if(cur.length===0){ listEl.innerHTML='<div class="empty">Nothing to plan - you are clear.</div>'; return; }
+    cur.forEach(c=>{
+      const row=document.createElement("div"); row.className="planrow";
+      const lab=document.createElement("div"); lab.className="planlab";
+      const todo=(c.subs&&c.subs.find(s=>!s.done));
+      lab.innerHTML='<span style="color:'+clientColor(c.client)+';font-weight:600">'+esc((clientEmoji(c.client)?clientEmoji(c.client)+" ":"")+c.client)+'</span>'+(todo?' <span style="color:var(--muted)">· '+esc(todo.t)+'</span>':'');
+      const btns=document.createElement("div"); btns.className="planbtns";
+      [["Today","today"],["Tomorrow","tomorrow"],["Someday","someday"]].forEach(o=>{
+        const b=document.createElement("button"); b.textContent=o[0];
+        b.onclick=()=>{ planAssign(c,o[1]); draw(); render(); saveState(); };
+        btns.appendChild(b);
+      });
+      row.appendChild(lab); row.appendChild(btns); listEl.appendChild(row);
+    });
+  }
+  draw();
+  showOverlay(true);
+  modal.querySelector("#m_close").onclick=()=>showOverlay(false);
+}
 function showOverlay(on){ document.getElementById("overlay").classList.toggle("open",on); }
 function esc(s){return String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));}
 
@@ -556,6 +649,11 @@ document.getElementById("resetBtn").onclick=()=>{ if(confirm("Delete all tasks? 
 document.getElementById("prevWk").onclick=()=>{ weekOffset--; render(); };
 document.getElementById("nextWk").onclick=()=>{ weekOffset++; render(); };
 document.getElementById("weeklabel").onclick=()=>{ weekOffset=defaultOffset(); render(); };
+document.getElementById("planBtn").onclick=openPlan;
+document.getElementById("backupBtn").onclick=exportData;
+document.getElementById("importBtn").onclick=()=>document.getElementById("importFile").click();
+document.getElementById("importFile").onchange=e=>{ const f=e.target.files[0]; if(f) importData(f); e.target.value=""; };
+document.getElementById("searchInput").oninput=e=>{ filterText=e.target.value.trim(); render(); };
 document.getElementById("overlay").addEventListener("click",e=>{ if(e.target.id==="overlay") showOverlay(false); });
 document.addEventListener("click",e=>{ if(!e.target.closest(".snoozemenu") && !(e.target.classList&&e.target.classList.contains("snoozebtn"))) document.querySelectorAll(".snoozemenu").forEach(m=>m.remove()); });
 
